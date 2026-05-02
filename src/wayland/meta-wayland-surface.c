@@ -49,6 +49,7 @@
 #include "wayland/meta-wayland-subsurface.h"
 #include "wayland/meta-wayland-transaction.h"
 #include "wayland/meta-wayland-viewporter.h"
+#include "wayland/meta-wayland-layer-shell.h"
 #include "wayland/meta-wayland-xdg-shell.h"
 #include "wayland/meta-window-wayland.h"
 #include "wayland/meta-wayland-linux-drm-syncobj.h"
@@ -1901,6 +1902,7 @@ meta_wayland_shell_init (MetaWaylandCompositor *compositor)
   meta_wayland_init_gtk_shell (compositor);
   meta_wayland_init_viewporter (compositor);
   meta_wayland_init_fractional_scale (compositor);
+  meta_wayland_layer_shell_init (compositor);
 }
 
 void

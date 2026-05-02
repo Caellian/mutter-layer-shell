@@ -661,6 +661,8 @@ mutter_sources += [
   'wayland/meta-wayland-xdg-session-state.h',
   'wayland/meta-wayland-xdg-session.c',
   'wayland/meta-wayland-xdg-session.h',
+  'wayland/meta-wayland-layer-shell.c',
+  'wayland/meta-wayland-layer-shell.h',
   'wayland/meta-wayland-xdg-shell.c',
   'wayland/meta-wayland-xdg-shell.h',
   'wayland/meta-wayland-xdg-dialog.c',
@@ -1086,6 +1088,7 @@ wayland_protocols = [
   ['xdg-system-bell', 'staging', 1, ],
   ['xdg-toplevel-drag', 'staging', 1, ],
   ['xdg-toplevel-tag', 'staging', 1, ],
+  ['wlr-layer-shell-unstable-v1', 'private', ],
 ]
 
 if have_xwayland

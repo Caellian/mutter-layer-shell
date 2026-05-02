@@ -117,6 +117,11 @@ typedef struct _MetaCompositorPrivate
   ClutterActor *top_window_group;
   ClutterActor *feedback_group;
 
+  ClutterActor *layer_background_group;
+  ClutterActor *layer_bottom_group;
+  ClutterActor *layer_top_group;
+  ClutterActor *layer_overlay_group;
+
   GList *windows;
 
   CoglContext *context;
@@ -249,6 +254,74 @@ meta_compositor_get_feedback_group (MetaCompositor *compositor)
 }
 
 /**
+ * meta_compositor_get_layer_background_group:
+ * @compositor: a #MetaCompositor
+ *
+ * Returns: (transfer none): The layer shell background group
+ */
+ClutterActor *
+meta_compositor_get_layer_background_group (MetaCompositor *compositor)
+{
+  MetaCompositorPrivate *priv;
+
+  g_return_val_if_fail (compositor, NULL);
+  priv = meta_compositor_get_instance_private (compositor);
+
+  return priv->layer_background_group;
+}
+
+/**
+ * meta_compositor_get_layer_bottom_group:
+ * @compositor: a #MetaCompositor
+ *
+ * Returns: (transfer none): The layer shell bottom group
+ */
+ClutterActor *
+meta_compositor_get_layer_bottom_group (MetaCompositor *compositor)
+{
+  MetaCompositorPrivate *priv;
+
+  g_return_val_if_fail (compositor, NULL);
+  priv = meta_compositor_get_instance_private (compositor);
+
+  return priv->layer_bottom_group;
+}
+
+/**
+ * meta_compositor_get_layer_top_group:
+ * @compositor: a #MetaCompositor
+ *
+ * Returns: (transfer none): The layer shell top group
+ */
+ClutterActor *
+meta_compositor_get_layer_top_group (MetaCompositor *compositor)
+{
+  MetaCompositorPrivate *priv;
+
+  g_return_val_if_fail (compositor, NULL);
+  priv = meta_compositor_get_instance_private (compositor);
+
+  return priv->layer_top_group;
+}
+
+/**
+ * meta_compositor_get_layer_overlay_group:
+ * @compositor: a #MetaCompositor
+ *
+ * Returns: (transfer none): The layer shell overlay group
+ */
+ClutterActor *
+meta_compositor_get_layer_overlay_group (MetaCompositor *compositor)
+{
+  MetaCompositorPrivate *priv;
+
+  g_return_val_if_fail (compositor, NULL);
+  priv = meta_compositor_get_instance_private (compositor);
+
+  return priv->layer_overlay_group;
+}
+
+/**
  * meta_compositor_get_window_actors:
  * @compositor: a #MetaCompositor
  *
@@ -300,6 +373,24 @@ meta_compositor_manage (MetaCompositor  *compositor,
   clutter_actor_add_child (stage, priv->top_window_group);
   clutter_actor_add_child (stage, priv->feedback_group);
 
+  priv->layer_background_group = clutter_actor_new ();
+  clutter_actor_set_accessible_name (priv->layer_background_group,
+                                     "Layer shell background");
+  priv->layer_bottom_group = clutter_actor_new ();
+  clutter_actor_set_accessible_name (priv->layer_bottom_group,
+                                     "Layer shell bottom");
+  priv->layer_top_group = clutter_actor_new ();
+  clutter_actor_set_accessible_name (priv->layer_top_group,
+                                     "Layer shell top");
+  priv->layer_overlay_group = clutter_actor_new ();
+  clutter_actor_set_accessible_name (priv->layer_overlay_group,
+                                     "Layer shell overlay");
+
+  clutter_actor_add_child (priv->window_group, priv->layer_background_group);
+  clutter_actor_add_child (priv->window_group, priv->layer_bottom_group);
+  clutter_actor_add_child (priv->window_group, priv->layer_top_group);
+  clutter_actor_add_child (priv->window_group, priv->layer_overlay_group);
+
   if (!META_COMPOSITOR_GET_CLASS (compositor)->manage (compositor, error))
     return FALSE;
 
@@ -318,6 +409,10 @@ meta_compositor_real_unmanage (MetaCompositor *compositor)
   g_clear_signal_handler (&priv->top_window_actor_destroy_id,
                           priv->top_window_actor);
 
+  g_clear_pointer (&priv->layer_overlay_group, clutter_actor_destroy);
+  g_clear_pointer (&priv->layer_top_group, clutter_actor_destroy);
+  g_clear_pointer (&priv->layer_bottom_group, clutter_actor_destroy);
+  g_clear_pointer (&priv->layer_background_group, clutter_actor_destroy);
   g_clear_pointer (&priv->window_group, clutter_actor_destroy);
   g_clear_pointer (&priv->top_window_group, clutter_actor_destroy);
   g_clear_pointer (&priv->feedback_group, clutter_actor_destroy);
@@ -587,6 +682,12 @@ sync_actor_stacking (MetaCompositor *compositor)
     {
       ClutterActor *actor = old->data;
 
+      if (actor == priv->layer_background_group ||
+          actor == priv->layer_bottom_group ||
+          actor == priv->layer_top_group ||
+          actor == priv->layer_overlay_group)
+        continue;
+
       if (META_IS_BACKGROUND_GROUP (actor) ||
           META_IS_BACKGROUND_ACTOR (actor))
         {
@@ -620,6 +721,13 @@ sync_actor_stacking (MetaCompositor *compositor)
    * We reorder the actors even if they're not parented to the window group,
    * to allow stacking to work with intermediate actors (eg during effects)
    */
+
+  clutter_actor_set_child_above_sibling (priv->window_group,
+                                         priv->layer_overlay_group, NULL);
+  clutter_actor_set_child_below_sibling (priv->window_group,
+                                         priv->layer_top_group,
+                                         priv->layer_overlay_group);
+
   for (tmp = g_list_last (priv->windows); tmp != NULL; tmp = tmp->prev)
     {
       ClutterActor *actor = tmp->data, *parent;
@@ -631,6 +739,12 @@ sync_actor_stacking (MetaCompositor *compositor)
   /* we prepended the backgrounds above so the last actor in the list
    * should get lowered to the bottom last.
    */
+  clutter_actor_set_child_below_sibling (priv->window_group,
+                                         priv->layer_bottom_group, NULL);
+
+  clutter_actor_set_child_below_sibling (priv->window_group,
+                                         priv->layer_background_group, NULL);
+
   for (tmp = backgrounds; tmp != NULL; tmp = tmp->next)
     {
       ClutterActor *actor = tmp->data, *parent;

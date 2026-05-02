@@ -88,6 +88,18 @@ META_EXPORT
 ClutterActor * meta_compositor_get_top_window_group (MetaCompositor *compositor);
 
 META_EXPORT
+ClutterActor * meta_compositor_get_layer_background_group (MetaCompositor *compositor);
+
+META_EXPORT
+ClutterActor * meta_compositor_get_layer_bottom_group (MetaCompositor *compositor);
+
+META_EXPORT
+ClutterActor * meta_compositor_get_layer_top_group (MetaCompositor *compositor);
+
+META_EXPORT
+ClutterActor * meta_compositor_get_layer_overlay_group (MetaCompositor *compositor);
+
+META_EXPORT
 void meta_compositor_disable_unredirect (MetaCompositor *compositor);
 
 META_EXPORT
