@@ -1,0 +1,103 @@
+name: Rebase on upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Every Monday at 06:00 UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ISSUE_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/GNOME/mutter.git || true
+          git fetch upstream main
+
+      - name: Rebase onto upstream
+        id: rebase
+        run: |
+          if git rebase upstream/main; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            git rebase --abort
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update package versions
+        if: steps.rebase.outputs.status == 'success'
+        run: |
+          version=$(grep -oP "version: '\K[^']+" meson.build | head -1)
+          echo "Upstream version: ${version}"
+
+          sed -i "s/^pkgver=.*/pkgver=${version}/" .github/packaging/arch/PKGBUILD
+          sed -i "s/^Version:.*/Version:        ${version}/" .github/packaging/fedora/mutter-layer-shell.spec
+          sed -i "s/^Version:.*/Version:        ${version}/" .github/packaging/opensuse/mutter-layer-shell.spec
+          sed -i "1s/([^)]*)/($version-1)/" .github/packaging/debian/changelog
+
+          if git diff --quiet; then
+            echo "No version change"
+          else
+            git add .github/packaging/
+            git commit -m "Update package versions to ${version}"
+          fi
+
+      - name: Push rebased branch
+        if: steps.rebase.outputs.status == 'success'
+        run: git push --force-with-lease origin main
+
+      - name: Close stale rebase failure issues
+        if: steps.rebase.outputs.status == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          gh issue list --label "rebase-conflict" --state open --json number -q '.[].number' | while read -r num; do
+            gh issue close "$num" -c "Rebase succeeded automatically. Closing."
+          done
+
+      - name: Open issue on failure
+        if: steps.rebase.outputs.status == 'failed'
+        env:
+          GH_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          upstream_head=$(git rev-parse upstream/main)
+          our_head=$(git rev-parse HEAD)
+          today=$(date -u +%Y-%m-%d)
+
+          # Don't open a duplicate
+          existing=$(gh issue list --label "rebase-conflict" --state open --json number -q '.[].number' | head -1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Rebase still failing as of ${today}. Upstream HEAD: \`${upstream_head}\`"
+            exit 1
+          fi
+
+          gh issue create \
+            --title "Rebase conflict: layer-shell patch needs update" \
+            --label "rebase-conflict" \
+            --body "Rebase of the layer-shell patch onto upstream mutter \`main\` failed.
+
+          **Upstream HEAD:** \`${upstream_head}\`
+          **Our HEAD:** \`${our_head}\`
+          **Date:** ${today}
+
+          ### Steps to fix
+          1. \`git fetch upstream main\`
+          2. \`git rebase upstream/main\`
+          3. Resolve conflicts
+          4. \`git push --force-with-lease origin main\`"
+          exit 1

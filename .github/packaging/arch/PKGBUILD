@@ -1,0 +1,92 @@
+pkgname=mutter-layer-shell
+_pkgname=mutter
+pkgver=50.1
+pkgrel=1
+pkgdesc="Mutter with wlr-layer-shell protocol support"
+url="https://github.com/Caellian/mutter-layer-shell"
+arch=(x86_64)
+license=(GPL-2.0-or-later)
+depends=(
+  at-spi2-core
+  cairo
+  colord
+  dconf
+  fontconfig
+  fribidi
+  glib2
+  gnome-desktop-4
+  gnome-settings-daemon
+  graphene
+  gsettings-desktop-schemas
+  gtk4
+  harfbuzz
+  iio-sensor-proxy
+  lcms2
+  libcanberra
+  libdisplay-info
+  libdrm
+  libei
+  libglvnd
+  libgudev
+  libinput
+  libpipewire
+  libsm
+  libstartup-notification
+  libsysprof-capture
+  libwacom
+  libx11
+  libxau
+  libxcb
+  libxcomposite
+  libxcursor
+  libxdamage
+  libxext
+  libxfixes
+  libxi
+  libxinerama
+  libxkbcommon
+  libxkbfile
+  libxrandr
+  libxtst
+  mesa
+  pango
+  pipewire
+  pixman
+  wayland
+  xorg-xwayland
+)
+makedepends=(
+  egl-wayland
+  gi-docgen
+  git
+  gobject-introspection
+  meson
+  sysprof
+  wayland-protocols
+  xorg-server-xvfb
+)
+provides=(mutter libmutter-18.so)
+conflicts=(mutter)
+
+build() {
+  cd "$startdir"
+
+  CFLAGS="${CFLAGS/-O2/-O3} -fno-semantic-interposition"
+  LDFLAGS+=" -Wl,-Bsymbolic-functions"
+
+  meson setup build \
+    --prefix /usr \
+    --libexecdir lib \
+    --buildtype release \
+    --wrap-mode nofallback \
+    -Dtests=disabled \
+    -Ddocs=false \
+    -Dinstalled_tests=false
+
+  meson compile -C build
+}
+
+package() {
+  cd "$startdir"
+  meson install -C build --destdir "$pkgdir"
+}

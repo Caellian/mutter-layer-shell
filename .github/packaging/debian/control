@@ -1,0 +1,19 @@
+Source: mutter-layer-shell
+Section: x11
+Priority: optional
+Maintainer: Tin Švagelj <tin.svagelj@live.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 1.5.0),
+Standards-Version: 4.6.2
+
+Package: mutter-layer-shell
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Provides: mutter
+Conflicts: mutter, libmutter-18-0
+Replaces: mutter, libmutter-18-0
+Description: Mutter with wlr-layer-shell protocol support
+ Mutter window manager and compositor patched with wlr-layer-shell protocol
+ support. Layer shell surfaces are drawn within the desktop layer, participating
+ in workspace switch animations and clipping.

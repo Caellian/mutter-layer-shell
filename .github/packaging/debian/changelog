@@ -1,0 +1,5 @@
+mutter-layer-shell (50.1-1) unstable; urgency=medium
+
+  * Mutter with wlr-layer-shell protocol support.
+
+ -- Tin Švagelj <tin.svagelj@live.com>  Fri, 02 May 2026 00:00:00 +0000

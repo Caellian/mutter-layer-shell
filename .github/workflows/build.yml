@@ -1,0 +1,382 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mutter-ref:
+        description: 'Upstream mutter ref to build against (tag, branch, or SHA)'
+        required: false
+        default: 'main'
+        type: string
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.mutter-ref != '' && inputs.mutter-ref != 'main'
+    && format('Build mutter @ {0}', inputs.mutter-ref)
+    || 'Build mutter (resolving...)' }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      mutter-ref: ${{ steps.ref.outputs.mutter-ref }}
+      display-name: ${{ steps.display.outputs.name }}
+    steps:
+      - name: Determine upstream ref
+        id: ref
+        run: |
+          ref="${{ inputs.mutter-ref }}"
+          echo "mutter-ref=${ref:-main}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone upstream mutter
+        run: |
+          git clone --depth 1 --branch "${{ steps.ref.outputs.mutter-ref }}" \
+            https://gitlab.gnome.org/GNOME/mutter.git mutter
+
+      - name: Extract version and commit
+        id: version
+        working-directory: mutter
+        run: |
+          version=$(grep -oP "version: '\K[^']+" meson.build | head -1)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          commit=$(git rev-parse HEAD)
+          commit_short=$(git rev-parse --short HEAD)
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+          echo "commit-short=${commit_short}" >> "$GITHUB_OUTPUT"
+
+      - name: Set display name
+        id: display
+        run: |
+          ref="${{ steps.ref.outputs.mutter-ref }}"
+          version="${{ steps.version.outputs.version }}"
+          commit_short="${{ steps.version.outputs.commit-short }}"
+          if [ "$ref" = "main" ]; then
+            echo "name=Build mutter ${version} (${commit_short})" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=Build mutter @ ${ref}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rename workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f "name=${{ steps.display.outputs.name }}"
+
+      - name: Summary
+        run: |
+          ref="${{ steps.ref.outputs.mutter-ref }}"
+          commit="${{ steps.version.outputs.commit }}"
+          echo "## ${{ steps.display.outputs.name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Mutter version:** ${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ref" != "main" ]; then
+            echo "- **Upstream ref:** \`${ref}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- **Upstream commit:** [\`${commit}\`](https://gitlab.gnome.org/GNOME/mutter/-/commit/${commit})" >> "$GITHUB_STEP_SUMMARY"
+
+  raw:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: registry.fedoraproject.org/fedora:44
+
+    steps:
+      - name: Install build deps
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            'dnf-command(builddep)' git tar gzip
+          dnf builddep -y mutter --setopt=install_weak_deps=False
+
+      - name: Clone upstream mutter
+        run: |
+          git clone --depth 1 --branch "${{ needs.resolve.outputs.mutter-ref }}" \
+            https://gitlab.gnome.org/GNOME/mutter.git mutter
+
+      - name: Fetch and apply patch
+        working-directory: mutter
+        run: |
+          curl -fLO "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches/add-layer-shell.patch"
+          git apply add-layer-shell.patch
+
+      - name: Build
+        working-directory: mutter
+        run: |
+          meson setup build \
+            --prefix /usr \
+            --buildtype release \
+            --wrap-mode nofallback \
+            -Dtests=disabled \
+            -Dprofiler=false \
+            -Ddocs=false \
+            -Dinstalled_tests=false
+          meson compile -C build 2>&1 | tee build.log
+
+      - name: Create install tarball
+        working-directory: mutter
+        run: |
+          version="${{ needs.resolve.outputs.version }}"
+          DESTDIR="$(pwd)/install-root" meson install -C build --no-rebuild
+          tar czf "../mutter-layer-shell-${version}-x86_64.tar.gz" -C install-root .
+
+      - name: Upload tarball
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-binary
+          path: mutter-layer-shell-*.tar.gz
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-build-log
+          path: mutter/build.log
+
+  arch:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Setup
+        run: |
+          pacman -Sy --noconfirm git curl
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+      - name: Install build deps
+        run: |
+          pacman -S --noconfirm --needed \
+            meson wayland wayland-protocols \
+            gnome-desktop-4 gnome-settings-daemon \
+            libxkbcommon libxkbfile libinput \
+            graphene gsettings-desktop-schemas \
+            pipewire libei libdisplay-info lcms2 colord \
+            libcanberra startup-notification \
+            gobject-introspection \
+            libx11 libxcomposite libxcursor libxdamage libxext \
+            libxfixes libxi libxinerama libxrandr libxtst libxcb \
+            sysprof pango fribidi \
+            libdrm mesa libglvnd egl-wayland \
+            libgudev libwacom json-glib \
+            xorg-xwayland xorg-server-xvfb
+
+      - name: Clone upstream mutter
+        run: |
+          git clone --depth 1 --branch "${{ needs.resolve.outputs.mutter-ref }}" \
+            https://gitlab.gnome.org/GNOME/mutter.git mutter
+
+      - name: Fetch and apply patch
+        working-directory: mutter
+        run: |
+          curl -fLO "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches/add-layer-shell.patch"
+          git apply add-layer-shell.patch
+
+      - name: Fetch PKGBUILD
+        working-directory: mutter
+        run: |
+          curl -fLO "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/packaging/arch/PKGBUILD"
+          version="${{ needs.resolve.outputs.version }}"
+          sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
+
+      - name: Build package
+        working-directory: mutter
+        run: |
+          chown -R builder:builder .
+          su builder -c 'makepkg -s --noconfirm --noprogressbar 2>&1 | tee build.log'
+          mkdir -p dist
+          cp -v *.pkg.tar.zst dist/ 2>/dev/null || true
+
+      - name: Upload package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: mutter/dist/
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-build-log
+          path: mutter/build.log
+
+  fedora:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: registry.fedoraproject.org/fedora:44
+
+    steps:
+      - name: Install build deps
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            'dnf-command(builddep)' git rpm-build rpmdevtools curl
+          dnf builddep -y mutter --setopt=install_weak_deps=False
+
+      - name: Clone upstream mutter
+        run: |
+          git clone --depth 1 --branch "${{ needs.resolve.outputs.mutter-ref }}" \
+            https://gitlab.gnome.org/GNOME/mutter.git mutter
+
+      - name: Fetch and apply patch
+        working-directory: mutter
+        run: |
+          curl -fLO "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches/add-layer-shell.patch"
+          git apply add-layer-shell.patch
+
+      - name: Build RPM
+        run: |
+          version="${{ needs.resolve.outputs.version }}"
+          rpmdev-setuptree
+          tar czf $HOME/rpmbuild/SOURCES/mutter-layer-shell-${version}.tar.gz \
+            --transform "s,^mutter,mutter-layer-shell-${version}," \
+            --exclude=.git mutter
+          curl -fL -o $HOME/rpmbuild/SPECS/mutter-layer-shell.spec \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/packaging/fedora/mutter-layer-shell.spec"
+          sed -i "s/^Version:.*/Version:        ${version}/" $HOME/rpmbuild/SPECS/mutter-layer-shell.spec
+          rpmbuild -bb $HOME/rpmbuild/SPECS/mutter-layer-shell.spec 2>&1 | tee build.log
+          mkdir -p dist
+          find $HOME/rpmbuild/RPMS -name '*.rpm' -exec cp -v {} dist/ \;
+
+      - name: Upload RPMs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-packages
+          path: dist/
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-build-log
+          path: build.log
+
+  opensuse:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: registry.opensuse.org/opensuse/tumbleweed:latest
+
+    steps:
+      - name: Install build deps
+        run: |
+          zypper --non-interactive install --no-recommends git rpm-build rpmdevtools curl
+          zypper --non-interactive addrepo -f \
+            'https://download.opensuse.org/source/tumbleweed/repo/oss/' source-oss
+          zypper --non-interactive --gpg-auto-import-keys refresh source-oss
+          zypper --non-interactive si -d mutter
+
+      - name: Clone upstream mutter
+        run: |
+          git clone --depth 1 --branch "${{ needs.resolve.outputs.mutter-ref }}" \
+            https://gitlab.gnome.org/GNOME/mutter.git mutter
+
+      - name: Fetch and apply patch
+        working-directory: mutter
+        run: |
+          curl -fLO "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches/add-layer-shell.patch"
+          git apply add-layer-shell.patch
+
+      - name: Build RPM
+        run: |
+          version="${{ needs.resolve.outputs.version }}"
+          rpmdev-setuptree
+          tar czf $HOME/rpmbuild/SOURCES/mutter-layer-shell-${version}.tar.gz \
+            --transform "s,^mutter,mutter-layer-shell-${version}," \
+            --exclude=.git mutter
+          curl -fL -o $HOME/rpmbuild/SPECS/mutter-layer-shell.spec \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/packaging/opensuse/mutter-layer-shell.spec"
+          sed -i "s/^Version:.*/Version:        ${version}/" $HOME/rpmbuild/SPECS/mutter-layer-shell.spec
+          rpmbuild -bb $HOME/rpmbuild/SPECS/mutter-layer-shell.spec 2>&1 | tee build.log
+          mkdir -p dist
+          find $HOME/rpmbuild/RPMS -name '*.rpm' -exec cp -v {} dist/ \;
+
+      - name: Upload RPMs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opensuse-packages
+          path: dist/
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opensuse-build-log
+          path: build.log
+
+  report-failures:
+    runs-on: ubuntu-latest
+    needs: [raw, arch, fedora, opensuse]
+    if: always() && contains(needs.*.result, 'failure')
+    permissions:
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all build logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-build-log'
+          merge-multiple: true
+          path: logs
+
+      - name: Create issue
+        env:
+          GH_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          today=$(date -u +%Y-%m-%d)
+
+          failed=""
+          for distro in raw arch fedora opensuse; do
+            result=$(echo '${{ toJSON(needs) }}' | jq -r ".${distro}.result")
+            if [ "$result" = "failure" ]; then
+              failed="${failed} ${distro}"
+            fi
+          done
+          failed=$(echo "$failed" | xargs)
+
+          log_snippet=""
+          for distro in $failed; do
+            logfile="logs/${distro}-build-log/build.log"
+            if [ -f "$logfile" ]; then
+              tail_lines=$(tail -80 "$logfile")
+              log_snippet="${log_snippet}
+
+          <details><summary><code>${distro}</code> build log (last 80 lines)</summary>
+
+          \`\`\`
+          ${tail_lines}
+          \`\`\`
+
+          </details>"
+            fi
+          done
+
+          existing=$(gh issue list --label "build-failure" --state open --json number -q '.[].number' | head -1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Build still failing for: **${failed}** (${today})
+
+          [Build run](${run_url})
+          ${log_snippet}"
+            exit 0
+          fi
+
+          gh issue create \
+            --title "Build failure: ${failed}" \
+            --label "build-failure" \
+            --body "Package build failed for: **${failed}**
+
+          **Date:** ${today}
+          **Run:** ${run_url}
+
+          ${log_snippet}"
